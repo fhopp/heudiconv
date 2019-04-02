@@ -1,35 +1,72 @@
+import subprocess
+import sys
 import os
-import os.path as op
 
 import logging
 
 lgr = logging.getLogger(__name__)
 
-# start with SLURM but extend past that #TODO
-def queue_conversion(progname, queue, outdir, heuristic, dicoms, sid,
-                     anon_cmd, converter, session,with_prov, bids):
+def queue_conversion(pyscript, queue, studyid, queue_args=None):
+    """
+    Write out conversion arguments to file and submit to a job scheduler.
+    Parses `sys.argv` for heudiconv arguments.
 
-        # Rework this...
-        convertcmd = ' '.join(['python', progname,
-                               '-o', outdir,
-                               '-f', heuristic,
-                               '-s', sid,
-                               '--anon-cmd', anon_cmd,
-                               '-c', converter])
-        if session:
-            convertcmd += " --ses '%s'" % session
-        if with_prov:
-            convertcmd += " --with-prov"
-        if bids:
-            convertcmd += " --bids"
-        if dicoms:
-            convertcmd += " --files"
-            convertcmd += [" '%s'" % f for f in dicoms]
+    Parameters
+    ----------
+    pyscript: file
+        path to `heudiconv` script
+    queue: string
+        batch scheduler to use
+    studyid: string
+        identifier for conversion
+    queue_args: string (optional)
+        additional queue arguments for job submission
 
-        script_file = 'dicom-%s.sh' % sid
-        with open(script_file, 'wt') as fp:
-            fp.writelines(['#!/bin/bash\n', convertcmd])
-        outcmd = 'sbatch -J dicom-%s -p %s -N1 -c2 --mem=20G %s' \
-                 % (sid, queue, script_file)
+    Returns
+    -------
+    proc: int
+        Queue submission exit code
+    """
 
-        os.system(outcmd)
+    SUPPORTED_QUEUES = {'SLURM': 'sbatch'}
+    if queue not in SUPPORTED_QUEUES:
+        raise NotImplementedError("Queuing with %s is not supported", queue)
+
+    args = clean_args(sys.argv[1:])
+    # make arguments executable
+    args.insert(0, pyscript)
+    pypath = sys.executable or "python"
+    args.insert(0, pypath)
+    convertcmd = " ".join(args)
+
+    # will overwrite across subjects
+    queue_file = os.path.abspath('heudiconv-%s.sh' % queue)
+    with open(queue_file, 'wt') as fp:
+        fp.write("#!/bin/bash\n")
+        if queue_args:
+            for qarg in queue_args.split():
+                fp.write("#SBATCH %s\n" % qarg)
+        fp.write(convertcmd + "\n")
+
+    cmd = [SUPPORTED_QUEUES[queue], queue_file]
+    proc = subprocess.call(cmd)
+    return proc
+
+def clean_args(hargs, keys=['-q', '--queue', '--queue-args']):
+    """
+    Filters out unwanted arguments
+
+    :param hargs: Arguments passed
+    :type hargs: Iterable
+    :param keys: Unwanted arguments
+    :type keys: Iterable
+    :return: Filtered arguments 
+    """
+    indicies = []
+    for i, arg in enumerate(hargs):
+        if arg in keys:
+            indicies.extend([i, i+1])
+    for j in sorted(indicies, reverse=True):
+        del hargs[j]
+    return hargs
+
