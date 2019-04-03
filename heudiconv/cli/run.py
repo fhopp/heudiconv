@@ -5,12 +5,12 @@ import os.path as op
 from argparse import ArgumentParser
 import sys
 
-from heudiconv import __version__, __packagename__
-from heudiconv.parser import get_study_sessions
-from heudiconv.utils import load_heuristic, anonymize_sid, treat_infofile, SeqInfo
-from heudiconv.convert import prep_conversion
-from heudiconv.bids import populate_bids_templates, tuneup_bids_json_files
-from heudiconv.queue import queue_conversion
+from .. import __version__, __packagename__
+from ..parser import get_study_sessions
+from ..utils import load_heuristic, anonymize_sid, treat_infofile, SeqInfo
+from ..convert import prep_conversion
+from ..bids import populate_bids_templates, tuneup_bids_json_files
+from ..queue import queue_conversion
 
 import inspect
 import logging
@@ -84,11 +84,11 @@ def process_extra_commands(outdir, args):
     elif args.command == 'sanitize-jsons':
         tuneup_bids_json_files(args.files)
     elif args.command == 'heuristics':
-        from heudiconv.utils import get_known_heuristics_with_descriptions
+        from ..utils import get_known_heuristics_with_descriptions
         for name_desc in get_known_heuristics_with_descriptions().items():
             print("- %s: %s" % name_desc)
     elif args.command == 'heuristic-info':
-        from heudiconv.utils import get_heuristic_description, get_known_heuristic_names
+        from ..utils import get_heuristic_description, get_known_heuristic_names
         if not args.heuristic:
             raise ValueError("Specify heuristic using -f. Known are: %s"
                              % ', '.join(get_known_heuristic_names()))
@@ -142,7 +142,7 @@ def get_parser():
     group.add_argument('--files', nargs='*',
                        help='Files (tarballs, dicoms) or directories '
                        'containing files to process. Cannot be provided if '
-                       'using --dicom_dir_template or --subjects')
+                       'using --dicom_dir_template.')
     parser.add_argument('-s', '--subjects', dest='subjs', type=str, nargs='*',
                         help='list of subjects - required for dicom template. '
                         'If not provided, DICOMS would first be "sorted" and '
@@ -173,8 +173,6 @@ def get_parser():
                         'single argument and return a single anonymized ID. '
                         'Also see --conv-outdir')
     parser.add_argument('-f', '--heuristic', dest='heuristic',
-                        # some commands might not need heuristic
-                        # required=True,
                         help='Name of a known heuristic or path to the Python'
                              'script containing heuristic')
     parser.add_argument('-p', '--with-prov', action='store_true',
@@ -248,6 +246,13 @@ def process_args(args):
     if not args.heuristic:
         raise RuntimeError("No heuristic specified - add to arguments and rerun")
 
+    if args.queue:
+        lgr.info("Queuing %s conversion", args.queue)
+        iterarg, iterables = ("files", len(args.files)) if args.files else \
+                             ("subjects", len(args.subjs))
+        queue_conversion(args.queue, iterarg, iterables, args.queue_args)
+        sys.exit(0)
+
     heuristic = load_heuristic(args.heuristic)
 
     study_sessions = get_study_sessions(args.dicom_dir_template, args.files,
@@ -281,31 +286,6 @@ def process_args(args):
 
         if locator == 'unknown':
             lgr.warning("Skipping unknown locator dataset")
-            continue
-
-        if args.queue:
-            # if seqinfo and not dicoms:
-            #     # flatten them all and provide into batching, which again
-            #     # would group them... heh
-            #     dicoms = sum(seqinfo.values(), [])
-            #     raise NotImplementedError(
-            #         "we already grouped them so need to add a switch to avoid "
-            #         "any grouping, so no outdir prefix doubled etc")
-
-            pyscript = op.abspath(inspect.getfile(inspect.currentframe()))
-
-            studyid = sid
-            if session:
-                studyid += "-%s" % session
-            if locator:
-                studyid += "-%s" % locator
-            # remove any separators
-            studyid = studyid.replace(op.sep, '_')
-
-            queue_conversion(pyscript,
-                             args.queue,
-                             studyid,
-                             args.queue_args)
             continue
 
         anon_sid = anonymize_sid(sid, args.anon_cmd) if args.anon_cmd else None
